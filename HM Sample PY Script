@@ -1,0 +1,657 @@
+'''##############################
+
+HeyMarket Quick Script
+
+- Faster Python Implementation
+- Managed by Ben
+
+##############################'''
+
+import csv
+import json
+import sys
+import os
+import time
+import requests
+from colorama import init
+from colorama import Fore, Style
+init(autoreset=True)
+
+#### Globals
+# Base
+HM_Data_Folder = "C:\\Users\\admin\\Documents\\Python\\csv\\"
+HM_Log_Folder = "C:\\Users\\admin\\Documents\\Python\\Log\\"
+
+# Contact Data - RAW Excel Filename
+HM_Ben_Data = HM_Data_Folder + "WDExport5000.csv"
+#HM_Ben_Data = HM_Data_Folder + "WDExport-1.csv"
+#HM_Ben_Data = HM_Data_Folder + "WDExport-2.csv"
+#HM_Ben_Data = HM_Data_Folder + "WDExport-3.csv"
+#HM_Ben_Data = HM_Data_Folder + "WDExport-4.csv"
+
+# Team/Inbox Data
+GLSTeam = {
+  "Name": "DEI",
+  "CostCenter": "00",
+  "Key": ""
+}
+
+# API
+HM_API_CustomFields = "https://api.heymarket.com/v1/contact-fields"
+HM_API_Contacts = "https://api.heymarket.com/v1/contacts"
+HM_API_BatchContacts = "https://api.heymarket.com/v1/batch/contacts?overwrite=true"
+HM_API_ContactUpdate = "https://api.heymarket.com/v1/contact/"
+HM_API_GetLists = "https://api.heymarket.com/v1/lists"
+HM_API_CreateList = "https://api.heymarket.com/v1/list"
+
+
+
+#### Func
+def sprint(s, c):
+    if c == "+":
+        print(Fore.GREEN + Style.BRIGHT + "[+]", end=" ")
+        print(s)
+    
+    elif c == "-":
+        print(Fore.RED + Style.BRIGHT + "[-]", end=" ")
+        print(s)
+
+    elif c == "!":
+        print(Fore.YELLOW + Style.BRIGHT + "[!]", end=" ")
+        print(s)
+        
+    elif c == "$":
+        print(Fore.CYAN + Style.BRIGHT + "[*]", end=" ")
+        print(s)
+
+    elif c == "++":
+        print(Fore.GREEN + Style.BRIGHT + s)
+    
+    elif c == "--":
+        print(Fore.RED + Style.BRIGHT + s)
+    
+    elif c == "!!":
+        print(Fore.YELLOW + Style.BRIGHT + s)
+    
+    elif c == "-!":
+        print(Fore.RED + Style.BRIGHT + s, end="")
+
+def sprintLog(s, c):
+
+    HMRunLog = open(HM_Log_Folder + "HMRunLog.txt", 'a+')
+
+    if c == "+":
+        print("[+]", end=" ", file=HMRunLog)
+        print(s, file=HMRunLog)
+    
+    elif c == "-":
+        print("[-]", end=" ", file=HMRunLog)
+        print(s, file=HMRunLog)
+
+    elif c == "!":
+        print("[!]", end=" ", file=HMRunLog)
+        print(s, file=HMRunLog)
+        
+    elif c == "$":
+        print("[*]", end=" ", file=HMRunLog)
+        print(s, file=HMRunLog)
+    
+    elif c == "++":
+        print(s, file=HMRunLog)
+
+def logSetup():
+    try:
+        os.remove(HM_Log_Folder + "HMRunLog.txt")
+    except OSError:
+        pass
+
+def GoodContacts(c):
+
+    #print("Before Empty Cleanup: " + str(len(c)) + " Contacts")
+
+    tempc = []
+    #tempd = []
+    goodContacts = []
+
+    # Remove Rows with No Phone
+    for row in c:
+        #print(row["Email_1"])
+        if row["Phone_Number_1"]:
+            #print(row["Local_ID"])
+            tempc.append(row)
+    
+    # Remove Rows with No Cost Center
+    for row in tempc:
+        #print(row["Email_1"])
+        if row["Group_1"]:
+        	#print(row["Local_ID"])
+            goodContacts.append(row)
+
+    # Duplicates remover
+    '''
+    # Remove Rows with No Cost Center
+    for row in tempc:
+        #print(row["Email_1"])
+        if row["Group_1"]:
+        	#print(row["Local_ID"])
+            tempd.append(row)
+
+    # Get Unique Cost Center List
+    seen = set()
+
+    for row in tempd:
+        if row["Phone_Number_1"] not in seen:
+            seen.add(row)
+            goodContacts.append(row)
+    '''
+    
+    #print("After Empty Cleanup: " + str(len(goodContacts)) + " Contacts")
+    removedContacts = len(c) - len(goodContacts)
+    sprint(str(removedContacts) + " Contacts missing PhoneNumber or CostCenter\n","-")
+
+    return goodContacts
+    
+def SanitizeAgents(c):
+
+    for contact in c:
+        contact["firstName"] = contact["firstName"].strip()
+
+        contact["lastName"] = contact["lastName"].strip()
+
+        contact["Phone_Number_1"] = contact["Phone_Number_1"].strip().replace('-','').replace('(','').replace(')','').replace('/','').replace('\\','')
+        
+        if contact["Phone_Number_1"][0] != "1":
+            contact["Phone_Number_1"] = "1" + contact["Phone_Number_1"]
+        
+        # WorkdayID
+        contact["Local_ID"] = contact["Local_ID"].strip()
+
+        # Cost Center Full Name
+        contact["Group_1"] = contact["Group_1"].strip()
+
+        #contact["ContactType"] = contact["ContactType"].strip()
+
+    # Remove Bad/No Phones
+    cGood = [item for item in c if (len(item["Phone_Number_1"]) > 8 and '@' not in item["Phone_Number_1"] and item["Phone_Number_1"].isnumeric())]
+    #cBad = [item for item in c if len(item["Phone"]) < 9]\
+
+    #print("Bad Items")
+    #print(*cBad, sep='\n\n')
+
+    #print(*cGood, sep='\n\n')
+
+    finalC = cGood
+    return finalC
+
+def GetTeamFields(s):
+    
+    HM_Headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + s
+    }
+
+    values = """
+    {
+    "ascending": false
+    }
+    """
+
+    cResponse = requests.post(HM_API_CustomFields, data=values, headers=HM_Headers)
+    #print(cResponse.status_code)
+
+    while cResponse.status_code == 429:
+        print("Response Code " + str(cResponse.status_code) + " - Hit API Limit - Sleeping")
+        time.sleep(30)
+        # Retry
+        cResponse = requests.post(HM_API_CustomFields, data=values, headers=HM_Headers)
+
+    cResponse.raise_for_status()
+
+    teamFields = cResponse.json()
+    customTeamFieldID = {}
+    
+    for x in teamFields:
+        #print(x)
+        if x["title"] == "Assigned GLS Location":
+            customTeamFieldID["AssignedGLSLocation"] = str(x["id"])
+
+        if x["title"] == "Contact Source":
+            customTeamFieldID["ContactSource"] = str(x["id"])
+        
+        if x["title"] == "Contact Type":
+            customTeamFieldID["ContactType"] = str(x["id"])
+        
+        if x["title"] == "Assigned Cost Center":
+            customTeamFieldID["AssignedCostCenter"] = str(x["id"])
+        
+        if x["title"] == "Workday ID":
+            customTeamFieldID["WorkdayID"] = str(x["id"])
+        
+        if x["title"] == "Associated Patient":
+            customTeamFieldID["AssociatedPatient"] = str(x["id"])
+        
+        if x["title"] == "MRN":
+            customTeamFieldID["MRN"] = str(x["id"])
+    
+    #print(customTeamFieldID)
+    return customTeamFieldID
+
+def GetTeamContacts(s):
+
+    HM_Headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + s
+    }
+
+    values = """
+    {
+    "limit": -100000000,
+    "page": -100000000
+    }
+    """
+
+    cResponse = requests.post(HM_API_Contacts, data=values, headers=HM_Headers)
+    #print(cResponse.status_code)
+
+    while cResponse.status_code == 429:
+        print("Response Code " + str(cResponse.status_code) + " - Hit API Limit - Sleeping")
+        time.sleep(30)
+        # Retry
+        cResponse = requests.post(HM_API_Contacts, data=values, headers=HM_Headers)
+    
+    cResponse.raise_for_status()
+
+    teamContacts = cResponse.json()
+    #print(cResponse.status_code)
+    #print(teamContacts)
+
+    return teamContacts
+
+def CheckOptedStatus(new,old):
+
+    newLoaded = new
+
+    for contact in newLoaded:
+        
+        contact["OPTED"] = False
+
+        for n in old:
+            if contact["Phone_Number_1"] == n["phone"]:
+                #print("Matching Current Contact:")
+                #print(contact)
+                if "is_opted_out" in n:
+                    #print(str(contact["firstName"]) + " is opted out")
+                    contact["OPTED"] = True
+                else:
+                    contact["OPTED"] = False
+
+    return newLoaded
+
+def BatchUpdateContacts(s,c):
+
+    ## Old Working
+    '''
+            HMU_Headers = {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + team["HMKey"]
+                }
+            
+            try:
+
+                responseCode = 0
+                
+                while responseCode != 200:
+                    bulkUpdate = requests.post(HM_API_BatchContacts, json=fullAPIData, headers=HMU_Headers)
+                    #print(bulkUpdate.status_code)
+                    responseCode = bulkUpdate.status_code
+                    
+                    if responseCode != 200:
+                        print("Hit API Limit - Sleeping")
+                        time.sleep(30)
+
+                #sprint(str(bulkUpdate.response_code), "+")
+                #sprint("Update Response", "+")
+                sprint(bulkUpdate.text, "+")
+            except Exception as e: 
+                sprint(e,"-")
+    '''
+
+    HMU_Headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + s
+        }
+    
+    try:
+        
+        bulkUpdate = requests.post(HM_API_BatchContacts, json=c, headers=HMU_Headers)
+        #print(bulkUpdate.status_code)
+        
+        while bulkUpdate.status_code == 429:
+            
+            print("Response Code " + str(bulkUpdate.status_code) + " - Hit API Limit - Sleeping")
+            time.sleep(30)
+            # Retry
+            bulkUpdate = requests.post(HM_API_BatchContacts, json=c, headers=HMU_Headers)
+
+        bulkUpdate.raise_for_status()
+                
+        sprint("Response: " + str(bulkUpdate.status_code) + " - " + bulkUpdate.text, "+")
+            
+    except (Exception, requests.exceptions.HTTPError) as e: 
+
+        sprint(e,"-")
+
+def NewList(s, c):
+
+    HM_Headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + s
+    }
+
+    values = f"""
+    {{
+    "title": "{c}"
+    }}
+    """
+
+    createListsResponse = requests.post(HM_API_CreateList, data=values, headers=HM_Headers)
+    #print(createListsResponse.json())
+    
+    while createListsResponse.status_code == 429:
+        print("Response Code " + str(createListsResponse.status_code) + " - Hit API Limit - Sleeping")
+        time.sleep(30)
+        # Retry
+        createListsResponse = requests.post(HM_API_CreateList, data=values, headers=HM_Headers)
+    createListsResponse.raise_for_status()
+    newList = createListsResponse.json()
+    
+    return newList["id"]
+
+def UpdateLists(s,cc,NewAgents=[]):
+
+    #sprint("Updating Lists: " + s + " - " + str(len(NewAgents)) + " Agents - " + str(len(NewPatients)) + " Patients", "+")
+
+    HM_Headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + s
+    }
+
+    values = """
+    {
+    "ascending": false
+    }
+    """
+
+    #### Grab All List on Team
+
+    teamListsResponse = requests.post(HM_API_GetLists, data=values, headers=HM_Headers)
+    #print(teamListsResponse.text)
+    #print("")
+    #print(teamListsResponse.status_code)
+    #print("AFTER")
+    
+    while teamListsResponse.status_code == 429:
+        print("Response Code " + str(teamListsResponse.status_code) + " - Hit API Limit - Sleeping")
+        time.sleep(30)
+        # Retry
+        teamListsResponse = requests.post(HM_API_GetLists, data=values, headers=HM_Headers)
+
+    if teamListsResponse.status_code != 200:
+        teamListsResponse.raise_for_status()
+
+    teamLists = teamListsResponse.json()
+
+    #### Select Location Lists ID
+
+    CurrentLocationListID = 0
+    #print(teamLists)
+    
+    for list in teamLists:
+        #print("List Name: " + list["name"])
+        #print(list)
+        
+        if "name" not in list:
+            #print("List has no Name field")
+            continue
+
+        if list["name"] == cc:
+            CurrentLocationListID = list["id"]
+
+
+    if CurrentLocationListID == 0:
+        CurrentLocationListID = NewList(s, cc)
+
+
+    ######## Push All Contacts to Lists
+
+    #### Employees
+    if NewAgents:
+        employeePhones = {}
+        for employee in NewAgents:
+            #print(employee)
+            employeePhones[employee["Phone_Number_1"]] = {}
+
+        employeeListDataJSON = {"title": cc, "members": employeePhones}
+
+        updateListResponse = requests.put("https://api.heymarket.com/v1/list/" + str(CurrentLocationListID), json=employeeListDataJSON, headers=HM_Headers)
+
+        while updateListResponse.status_code == 429:
+            print("Response Code " + str(updateListResponse.status_code) + " - Hit API Limit - Sleeping")
+            time.sleep(30)
+            # Retry
+            updateListResponse = requests.put("https://api.heymarket.com/v1/list/" + str(CurrentLocationListID), json=employeeListDataJSON, headers=HM_Headers)
+        
+        #print(employeeListDataJSON)
+
+        if updateListResponse.status_code != 200:
+            updateListResponse.raise_for_status()
+
+        if updateListResponse.status_code == 200:
+            sprint(cc + " | List Updated - " + str(len(NewAgents)), "+")
+            sprintLog(cc + " | List Updated - " + str(len(NewAgents)), "+")
+
+def batch(iterable, n=1):
+
+    l = len(iterable)
+    for ndx in range(0, l, n):
+        yield iterable[ndx:min(ndx + n, l)]
+
+def BatchedUpdate(s,c):
+    #data = [0,12,3,4,5,6,7,8,12,13,14,15,16,17,18,19]
+    sprint("Beginning Batches on " + str(len(c)) + " Contacts", "$")
+    
+    batchedList = batch(c, 500)
+    batchesCount = sum(1 for _ in batchedList)
+    i = 1
+    
+    for b in batch(c, 500):
+        print("Updating batch of " + str(len(b)) + " | " + str(i) + "/" + str(batchesCount))
+        # DO something with this batch
+        BatchUpdateContacts(s,b)
+        i += 1
+        #time.sleep(1)
+
+    
+# Lift
+def Sync():
+    
+    #os.system('cls')
+    print("")
+    print("[---------------- Beginning Sync ----------------]")
+    print("")
+     
+    sprintLog("", "++")
+    sprintLog("[---------------- Beginning Sync ----------------]", "$")
+    sprintLog("", "++")
+
+    ## Load Master Datas - GLS MAIN DATA
+
+    # Load Data
+    with open(HM_Ben_Data, encoding = 'cp850') as f:
+        reader = csv.DictReader(f)
+        GLSData = list(reader)
+    
+    # Item Count Check
+    #print(str(len(GLSData)) + " items")
+    #print(GLSData)
+
+    #########################################
+    # Primary Code for Sync
+    #########################################
+    
+    teamClean = "Team Name - " + GLSTeam["Name"] + " | Cost Center - " + GLSTeam["CostCenter"]
+    sprint(teamClean, "$")
+    sprintLog(teamClean, "$")
+    print("")
+
+    #### Load Current HM Team Contacts
+        
+    liveTeamContacts = GetTeamContacts(GLSTeam["Key"])
+    #print("Got " + str(len(liveTeamContacts)) + " live contacts")
+
+    #### Load Current Team Fields
+    liveTeamCustomFields = GetTeamFields(GLSTeam["Key"])
+    #print(liveTeamCustomFields)
+
+    #### Process Incoming Contacts
+
+    # Remove Bad Rows - Missing Phone + Cost Center
+    GLSAgents = GoodContacts(GLSData)
+
+    # Current Count
+    sprint(str(len(GLSAgents)) + " Contacts Loaded", "+")
+    #print(GLSAgents[0])
+
+    # Extract Cost Center
+    for contact in GLSAgents:
+        contact["CostCenter"] = contact["Group_1"].split()[0]
+
+    # Get Unique Cost Center List
+    uniqueCostCenters = []
+    seen = set()
+
+    for contact in GLSAgents:
+        if contact["CostCenter"] not in seen:
+            seen.add(contact["CostCenter"])
+            uniqueCostCenters.append(list( contact[i] for i in ["Group_1", "CostCenter"] ))
+
+            
+    #print(str(len(uniqueCostCenters)) + " Unique Cost Centers")
+    #for x in uniqueCostCenters:
+    #    print(x)
+
+    #########################################
+    # Contacts Batch Update
+    #########################################
+        
+    # if any contacts loaded, do API Call - Agents
+    if GLSAgents:
+        cleanedAgents = SanitizeAgents(GLSAgents)
+        loadedAgents = CheckOptedStatus(cleanedAgents, liveTeamContacts)
+        del cleanedAgents
+
+        #### Build Bulk API Update Call
+        fullAPIDataAgents = []
+
+        ## SELECT CUSTOM FIELDS
+        for contact in loadedAgents:
+            #print(contact)
+
+            temp = {
+                "phone": contact["Phone_Number_1"],
+                "last": contact["lastName"],
+                "first": contact["firstName"],
+                "is_opted_out": contact["OPTED"],
+                "custom": {
+                    liveTeamCustomFields["WorkdayID"]: contact["Local_ID"],
+                    liveTeamCustomFields["AssignedCostCenter"]: contact["CostCenter"],
+                    liveTeamCustomFields["ContactType"]: "Employee",
+                    liveTeamCustomFields["ContactSource"]: "Workday"
+                    #liveTeamCustomFields["AssignedGLSLocation"]: contact["GLSLocation"]
+                    }
+                }
+            
+            #print(temp)
+            fullAPIDataAgents.append(temp)
+            
+        #### Final Contact List
+        sprint(str(len(fullAPIDataAgents)) + " Agent Contacts Updating", "+")
+        sprintLog(str(len(fullAPIDataAgents)) + " Agent Contacts Updating", "+")
+        #print(json.dumps(fullAPIDataAgents[1], indent=2))
+
+        #print(json.dumps(loadedAgents[1], indent=2))
+
+        #### Final API Call
+
+        # Option 1 - Send All
+       
+        BatchUpdateContacts(GLSTeam["Key"],fullAPIDataAgents)
+        
+        # Option 2 - Send 500 At a Time
+        
+        if len(fullAPIDataAgents) > 1000:
+            #BatchUpdateContacts(GLSTeam["Key"],fullAPIDataAgents)
+            #print(str(len(fullAPIDataAgents)))
+            BatchedUpdate(GLSTeam["Key"],fullAPIDataAgents)
+        else:
+            BatchUpdateContacts(GLSTeam["Key"],fullAPIDataAgents)
+            #print(str(len(fullAPIDataAgents)))
+        
+    else:
+        sprint("0 Employee Contacts Updating", "$")
+        sprintLog("0 Employee Contacts Updating", "$")
+
+
+    
+    #########################################
+    # Lists Update
+    #########################################
+    
+    print("")
+    sprint("Updating " + str(len(uniqueCostCenters)) + " Lists", "$")
+    print("")
+    
+    # Create/Update List for Each Unique Cost Center
+    for CC in uniqueCostCenters:
+        teamClean = "List | " + CC[0]
+        sprint(teamClean, "$")
+        sprintLog(teamClean, "$")
+
+        ccListAgents = []
+
+        # Load CC Agents for List
+        for contact in loadedAgents:
+            if contact["CostCenter"] == CC[1]:
+                ccListAgents.append(contact)
+
+        #print(str(len(ccListAgents)) + " Agents")
+
+        # If Agents in Cost Center
+        if (ccListAgents):
+            UpdateLists(GLSTeam["Key"], CC[0], ccListAgents)
+            print("")
+        else:
+            sprint("No List Updates", "$")
+            sprintLog("No List Updates", "$")
+    
+    print("")
+    sprintLog("", "++")
+
+    # Per Team
+    #time.sleep(1)
+    
+
+#### Main
+
+logSetup()
+
+Sync()
+
+print("")
+sprint("Sync Complete", "+")
